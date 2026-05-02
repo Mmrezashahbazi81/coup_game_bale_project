@@ -15,7 +15,7 @@ class GameState(BaseModel):
     chat_id: int
     creator_id: int
     mode: str = "classic"
-    state: str = "LOBBY"  # LOBBY, SETTINGS, PLAYING, CHALLENGING, FINISHED
+    state: str = "LOBBY"
     players: Dict[str, Player] = {}
     player_order: List[int] = []
     current_turn_index: int = 0
@@ -25,10 +25,12 @@ class GameState(BaseModel):
     actor_id: Optional[int] = None
     target_id: Optional[int] = None
     
-    # NEW: تنظیمات تایمر
-    turn_timer: int = 60  # پیش‌فرض ۶۰ ثانیه
-    challenge_timer: int = 30  # پیش‌فرض ۳۰ ثانیه
-    timer_task_id: Optional[str] = None  # NEW: ذخیره task id برای کنسل کردن
+    turn_timer: int = 60
+    challenge_timer: int = 30
+    timer_task_id: Optional[str] = None
+    
+    # NEW: فیلد game_log برای تاریخچه بازی
+    game_log: List[str] = []
     
     def can_start(self) -> bool:
         return len(self.players) >= 2
