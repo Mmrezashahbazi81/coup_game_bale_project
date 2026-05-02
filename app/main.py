@@ -65,6 +65,9 @@ async def answer_callback_query(callback_query_id: str, text: str, show_alert: b
 async def root():
     return {"status": "Bot is running!"}
 
+# app/main.py
+# ... (بقیه کد از فاز ۱ بدون تغییر)
+
 @app.post("/webhook")
 async def webhook(request: Request):
     try:
@@ -84,7 +87,6 @@ async def webhook(request: Request):
                     await send_message(chat_id, "❌ یک بازی در حال اجراست!")
                     return {"status": "ok"}
                 
-                # ساخت بازی جدید
                 new_game = GameState(
                     chat_id=chat_id,
                     creator_id=user["id"],
@@ -96,7 +98,6 @@ async def webhook(request: Request):
                 )
                 save_game(chat_id, new_game)
                 
-                # ارسال پیام لابی
                 reply_markup = {
                     "inline_keyboard": [
                         [{"text": "🎮 ورود به بازی", "callback_data": "join"}],
@@ -116,6 +117,7 @@ async def webhook(request: Request):
             data = cq["data"]
             cq_id = cq["id"]
             
+            # NEW: دکمه ورود به بازی
             if data == "join":
                 game = get_game(chat_id)
                 if not game or game.state != "LOBBY":
@@ -133,9 +135,9 @@ async def webhook(request: Request):
                     save_game(chat_id, game)
                     await answer_callback_query(cq_id, "✅ وارد بازی شدید!")
                     
-                    # آپدیت لیست بازیکنان
+                    # آپدیت پیام لابی
                     players_list = "\n".join([f"{i+1}. {p.name}" for i, p in enumerate(game.players.values())])
-                    text_msg = f"🎭 بازی جدید ایجاد شد!\n\n👥 بازیکنان:\n{players_list}"
+                    text_msg = f"🎭 بازی جدید ایجاد شد!\n\n👥 بازیکنان:\n{players_list}\n\nحداقل ۳ نفر برای شروع نیاز است."
                     reply_markup = {
                         "inline_keyboard": [
                             [{"text": "🎮 ورود به بازی", "callback_data": "join"}],
@@ -143,6 +145,49 @@ async def webhook(request: Request):
                         ]
                     }
                     await edit_message_text(chat_id, message_id, text_msg, reply_markup)
+            
+            # NEW: دکمه شروع بازی
+            elif data == "start":
+                game = get_game(chat_id)
+                if not game or game.state != "LOBBY":
+                    await answer_callback_query(cq_id, "❌ بازی در حال عضوگیری نیست!", True)
+                    return {"status": "ok"}
+                
+                # چک کردن حداقل بازیکن
+                if not game.can_start():
+                    await answer_callback_query(
+                        cq_id, 
+                        f"⚠️ حداقل ۳ بازیکن لازم است! (فعلاً {len(game.players)} نفر)", 
+                        True
+                    )
+                    return {"status": "ok"}
+                
+                # NEW: شروع بازی!
+                game.state = "PLAYING"
+                game.deal_cards()  # توزیع کارت‌ها
+                game.set_player_order()  # تنظیم نوبت
+                save_game(chat_id, game)
+                
+                # NEW: ارسال پیام شروع بازی
+                players_list = "\n".join([f"{i+1}. {game.players[str(uid)].name}" for i, uid in enumerate(game.player_order)])
+                text_msg = f"🎮 بازی شروع شد!\n\n👥 ترتیب بازیکنان:\n{players_list}\n\n🃏 کارت‌ها توزیع شد!\n💰 هر بازیکن ۲ سکه دارد.\n\n🔹 نوبت: {game.players[str(game.player_order[0])].name}"
+                
+                reply_markup = {
+                    "inline_keyboard": [
+                        [{"text": "💰 درآمد", "callback_data": "action_income"}],
+                        [{"text": "🌐 کمک خارجی", "callback_data": "action_foreign_aid"}],
+                        [{"text": "💀 کودتا", "callback_data": "action_coup"}],
+                        [{"text": "🎯 اقدامات شخصیت‌ها", "callback_data": "action_character"}]
+                    ]
+                }
+                
+                await edit_message_text(chat_id, message_id, text_msg, reply_markup)
+                
+                # NEW: ارسال پیام خصوصی به هر بازیکن با کارت‌هاش
+                for uid, player in game.players.items():
+                    cards_text = " | ".join(player.cards)
+                    private_msg = f"🃏 کارت‌های شما: {cards_text}\n💰 سکه‌ها: {player.coins}"
+                    await send_message(int(uid), private_msg)
         
         return {"status": "ok"}
     
