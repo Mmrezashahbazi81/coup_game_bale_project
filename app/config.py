@@ -15,8 +15,11 @@ class Settings:
     
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
     
-    # NEW: تنظیمات بازی
     MAX_PLAYERS: int = int(os.getenv("MAX_PLAYERS", "6"))
-    MIN_PLAYERS: int = int(os.getenv("MIN_PLAYERS", "3"))
+    MIN_PLAYERS: int = int(os.getenv("MIN_PLAYERS", "2"))
+    
+    # NEW: تنظیمات تایمر
+    DEFAULT_TURN_TIMER: int = int(os.getenv("DEFAULT_TURN_TIMER", "60"))  # ۶۰ ثانیه پیش‌فرض
+    DEFAULT_CHALLENGE_TIMER: int = int(os.getenv("DEFAULT_CHALLENGE_TIMER", "30"))  # ۳۰ ثانیه پیش‌فرض
 
 settings = Settings()
