@@ -1,10 +1,10 @@
-# app/main.py
 from fastapi import FastAPI, Request
 import httpx
 from app.models import GameState, Player
 from app.database import get_game, save_game, delete_game
 from app.config import settings
 import logging
+import random  # NEW: برای انتخاب تصادفی کارت سفیر
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=getattr(logging, settings.LOG_LEVEL))
@@ -12,7 +12,7 @@ logging.basicConfig(level=getattr(logging, settings.LOG_LEVEL))
 app = FastAPI()
 
 # ============================================
-# توابع کمکی (بدون تغییر)
+# توابع کمکی
 # ============================================
 
 async def send_message(chat_id: int, text: str, reply_markup: dict = None):
@@ -60,9 +60,6 @@ async def answer_callback_query(callback_query_id: str, text: str, show_alert: b
     except Exception as e:
         logger.error(f"Error answering callback: {e}")
 
-# ============================================
-# NEW: تابع کمکی برای چک کردن نوبت
-# ============================================
 def is_player_turn(game, user_id):
     """چک میکنه آیا نوبت این بازیکنه یا نه"""
     if not game or game.state != "PLAYING":
@@ -70,9 +67,6 @@ def is_player_turn(game, user_id):
     current_player = game.get_current_player()
     return current_player.user_id == user_id
 
-# ============================================
-# NEW: تابع کمکی برای ساخت منوی اصلی
-# ============================================
 def get_main_menu_keyboard():
     """برگردوندن منوی اصلی اکشن‌ها"""
     return {
@@ -84,9 +78,6 @@ def get_main_menu_keyboard():
         ]
     }
 
-# ============================================
-# NEW: تابع کمکی برای ساخت متن وضعیت بازی
-# ============================================
 def get_game_status_text(game):
     """ساخت متن وضعیت فعلی بازی"""
     next_player = game.get_current_player()
@@ -209,7 +200,7 @@ async def webhook(request: Request):
                 players_list = "\n".join([f"{i+1}. {game.players[str(uid)].name}" for i, uid in enumerate(game.player_order)])
                 text_msg = f"🎮 بازی شروع شد!\n\n👥 ترتیب بازیکنان:\n{players_list}\n\n🃏 کارت‌ها توزیع شد!\n💰 هر بازیکن ۲ سکه دارد.\n\n🔹 نوبت: {current.name}"
                 
-                await edit_message_text(chat_id, message_id, text_msg, get_main_menu_keyboard())  # CHANGED: استفاده از تابع کمکی
+                await edit_message_text(chat_id, message_id, text_msg, get_main_menu_keyboard())
                 
                 for uid, player in game.players.items():
                     cards_text = " | ".join(player.cards)
@@ -217,7 +208,7 @@ async def webhook(request: Request):
                     await send_message(int(uid), private_msg)
             
             # ============================================
-            # NEW: اکشن درآمد
+            # اکشن درآمد
             # ============================================
             elif data == "action_income":
                 game = get_game(chat_id)
@@ -244,11 +235,11 @@ async def webhook(request: Request):
                     delete_game(chat_id)
                     return {"status": "ok"}
                 
-                text_msg = get_game_status_text(game)  # CHANGED: استفاده از تابع کمکی
-                await edit_message_text(chat_id, message_id, text_msg, get_main_menu_keyboard())  # CHANGED
+                text_msg = get_game_status_text(game)
+                await edit_message_text(chat_id, message_id, text_msg, get_main_menu_keyboard())
             
             # ============================================
-            # NEW: اکشن کمک خارجی
+            # اکشن کمک خارجی
             # ============================================
             elif data == "action_foreign_aid":
                 game = get_game(chat_id)
@@ -275,11 +266,11 @@ async def webhook(request: Request):
                     delete_game(chat_id)
                     return {"status": "ok"}
                 
-                text_msg = get_game_status_text(game)  # CHANGED
-                await edit_message_text(chat_id, message_id, text_msg, get_main_menu_keyboard())  # CHANGED
+                text_msg = get_game_status_text(game)
+                await edit_message_text(chat_id, message_id, text_msg, get_main_menu_keyboard())
             
             # ============================================
-            # NEW: اکشن کودتا - انتخاب هدف
+            # اکشن کودتا - انتخاب هدف
             # ============================================
             elif data == "action_coup":
                 game = get_game(chat_id)
@@ -321,7 +312,7 @@ async def webhook(request: Request):
                 await edit_message_text(chat_id, message_id, text_msg, reply_markup)
             
             # ============================================
-            # NEW: اجرای کودتا روی هدف
+            # اجرای کودتا روی هدف
             # ============================================
             elif data.startswith("coup_target_"):
                 game = get_game(chat_id)
@@ -357,11 +348,83 @@ async def webhook(request: Request):
                 game.next_turn()
                 save_game(chat_id, game)
                 
-                text_msg = get_game_status_text(game)  # CHANGED
-                await edit_message_text(chat_id, message_id, text_msg, get_main_menu_keyboard())  # CHANGED
+                text_msg = get_game_status_text(game)
+                await edit_message_text(chat_id, message_id, text_msg, get_main_menu_keyboard())
             
             # ============================================
-            # NEW: انصراف از انتخاب هدف
+            # NEW: اجرای ترور روی هدف (برای Assassin)
+            # ============================================
+            elif data.startswith("assassinate_target_"):
+                game = get_game(chat_id)
+                if not game or game.state != "PLAYING":
+                    await answer_callback_query(cq_id, "❌ بازی در جریان نیست!", True)
+                    return {"status": "ok"}
+                
+                target_id = int(data.replace("assassinate_target_", ""))
+                
+                if not game.remove_coins(user["id"], 3):
+                    await answer_callback_query(cq_id, "❌ سکه کافی ندارید!", True)
+                    return {"status": "ok"}
+                
+                target = game.players[str(target_id)]
+                lost_card = target.cards.pop() if target.cards else "هیچ"
+                target.dead_cards.append(lost_card)
+                
+                if not target.cards:
+                    target.is_alive = False
+                    await answer_callback_query(cq_id, f"🗡️ {target.name} ترور شد! (کارت سوخته: {lost_card})")
+                else:
+                    await answer_callback_query(cq_id, f"🗡️ یک کارت {target.name} سوزانده شد! ({lost_card})")
+                
+                winner = game.check_winner()
+                if winner:
+                    game.next_turn()
+                    save_game(chat_id, game)
+                    text_msg = f"🏆 {winner.name} برنده بازی شد! 🎉\n\n🎭 بازی به پایان رسید."
+                    await edit_message_text(chat_id, message_id, text_msg, None)
+                    delete_game(chat_id)
+                    return {"status": "ok"}
+                
+                game.next_turn()
+                save_game(chat_id, game)
+                
+                text_msg = get_game_status_text(game)
+                await edit_message_text(chat_id, message_id, text_msg, get_main_menu_keyboard())
+            
+            # ============================================
+            # NEW: اجرای دزدی روی هدف (برای Captain)
+            # ============================================
+            elif data.startswith("steal_target_"):
+                game = get_game(chat_id)
+                if not game or game.state != "PLAYING":
+                    await answer_callback_query(cq_id, "❌ بازی در جریان نیست!", True)
+                    return {"status": "ok"}
+                
+                target_id = int(data.replace("steal_target_", ""))
+                target = game.players[str(target_id)]
+                
+                # دزدیدن ۲ سکه (یا هرچقدر که هدف داره)
+                steal_amount = min(2, target.coins)
+                game.remove_coins(target_id, steal_amount)
+                game.add_coins(user["id"], steal_amount)
+                
+                await answer_callback_query(cq_id, f"🏴‍☠️ {steal_amount} سکه از {target.name} دزدیدید!")
+                
+                game.next_turn()
+                save_game(chat_id, game)
+                
+                winner = game.check_winner()
+                if winner:
+                    text_msg = f"🏆 {winner.name} برنده بازی شد! 🎉\n\n🎭 بازی به پایان رسید."
+                    await edit_message_text(chat_id, message_id, text_msg, None)
+                    delete_game(chat_id)
+                    return {"status": "ok"}
+                
+                text_msg = get_game_status_text(game)
+                await edit_message_text(chat_id, message_id, text_msg, get_main_menu_keyboard())
+            
+            # ============================================
+            # انصراف از انتخاب هدف
             # ============================================
             elif data == "action_cancel":
                 game = get_game(chat_id)
@@ -369,12 +432,12 @@ async def webhook(request: Request):
                     await answer_callback_query(cq_id, "❌ بازی در جریان نیست!", True)
                     return {"status": "ok"}
                 
-                text_msg = get_game_status_text(game)  # CHANGED
-                await edit_message_text(chat_id, message_id, text_msg, get_main_menu_keyboard())  # CHANGED
+                text_msg = get_game_status_text(game)
+                await edit_message_text(chat_id, message_id, text_msg, get_main_menu_keyboard())
                 await answer_callback_query(cq_id, "🔙 بازگشت به منوی اصلی")
             
             # ============================================
-            # NEW: منوی شخصیت‌ها
+            # منوی شخصیت‌ها
             # ============================================
             elif data == "action_character":
                 game = get_game(chat_id)
@@ -402,7 +465,7 @@ async def webhook(request: Request):
                 await answer_callback_query(cq_id, "🎯 منوی شخصیت‌ها")
             
             # ============================================
-            # NEW: اکشن Duke - مالیات
+            # اکشن Duke - مالیات
             # ============================================
             elif data == "char_duke":
                 game = get_game(chat_id)
@@ -429,23 +492,139 @@ async def webhook(request: Request):
                     delete_game(chat_id)
                     return {"status": "ok"}
                 
-                text_msg = get_game_status_text(game)  # CHANGED
-                await edit_message_text(chat_id, message_id, text_msg, get_main_menu_keyboard())  # CHANGED
+                text_msg = get_game_status_text(game)
+                await edit_message_text(chat_id, message_id, text_msg, get_main_menu_keyboard())
             
             # ============================================
-            # NEW: بقیه شخصیت‌ها (placeholder)
+            # NEW: اکشن Assassin - انتخاب هدف ترور
             # ============================================
             elif data == "char_assassin":
-                await answer_callback_query(cq_id, "🚧 Assassin به زودی...", True)
+                game = get_game(chat_id)
+                if not game or game.state != "PLAYING":
+                    await answer_callback_query(cq_id, "❌ بازی در جریان نیست!", True)
+                    return {"status": "ok"}
+                
+                if not is_player_turn(game, user["id"]):
+                    await answer_callback_query(cq_id, "⚠️ نوبت شما نیست!", True)
+                    return {"status": "ok"}
+                
+                player = game.players[str(user["id"])]
+                if player.coins < 3:
+                    await answer_callback_query(cq_id, f"❌ سکه کافی ندارید! (۳ سکه لازم است، شما: {player.coins}💰)", True)
+                    return {"status": "ok"}
+                
+                alive_players = [
+                    p for uid, p in game.players.items() 
+                    if p.is_alive and p.user_id != user["id"]
+                ]
+                
+                if not alive_players:
+                    await answer_callback_query(cq_id, "❌ بازیکن زنده‌ای برای ترور نیست!", True)
+                    return {"status": "ok"}
+                
+                target_buttons = []
+                for p in alive_players:
+                    target_buttons.append([{
+                        "text": f"🗡️ {p.name}",
+                        "callback_data": f"assassinate_target_{p.user_id}"
+                    }])
+                target_buttons.append([{"text": "🔙 انصراف", "callback_data": "action_cancel"}])
+                
+                await answer_callback_query(cq_id, "🎯 بازیکن مورد نظر را انتخاب کنید:")
+                
+                text_msg = f"🗡️ ترور!\n\nانتخاب هدف (۳ سکه هزینه دارد):"
+                reply_markup = {"inline_keyboard": target_buttons}
+                
+                await edit_message_text(chat_id, message_id, text_msg, reply_markup)
             
+            # ============================================
+            # NEW: Contessa (فعلاً فقط در Response استفاده میشه)
+            # ============================================
             elif data == "char_contessa":
-                await answer_callback_query(cq_id, "🚧 Contessa به زودی...", True)
+                await answer_callback_query(
+                    cq_id, 
+                    "🛡️ Contessa فقط برای بلاک کردن ترور استفاده میشود.\nمنتظر بمانید تا کسی شما را ترور کند.", 
+                    True
+                )
             
+            # ============================================
+            # NEW: اکشن Captain - انتخاب هدف دزدی
+            # ============================================
             elif data == "char_captain":
-                await answer_callback_query(cq_id, "🚧 Captain به زودی...", True)
+                game = get_game(chat_id)
+                if not game or game.state != "PLAYING":
+                    await answer_callback_query(cq_id, "❌ بازی در جریان نیست!", True)
+                    return {"status": "ok"}
+                
+                if not is_player_turn(game, user["id"]):
+                    await answer_callback_query(cq_id, "⚠️ نوبت شما نیست!", True)
+                    return {"status": "ok"}
+                
+                alive_players = [
+                    p for uid, p in game.players.items() 
+                    if p.is_alive and p.user_id != user["id"] and p.coins > 0
+                ]
+                
+                if not alive_players:
+                    await answer_callback_query(cq_id, "❌ بازیکنی با سکه برای دزدی نیست!", True)
+                    return {"status": "ok"}
+                
+                target_buttons = []
+                for p in alive_players:
+                    steal_amount = min(2, p.coins)
+                    target_buttons.append([{
+                        "text": f"🏴‍☠️ {p.name} ({p.coins}💰)",
+                        "callback_data": f"steal_target_{p.user_id}"
+                    }])
+                target_buttons.append([{"text": "🔙 انصراف", "callback_data": "action_cancel"}])
+                
+                await answer_callback_query(cq_id, "🎯 بازیکن مورد نظر را برای دزدی انتخاب کنید:")
+                
+                text_msg = f"🏴‍☠️ دزدی!\n\nانتخاب هدف (حداکثر ۲ سکه):"
+                reply_markup = {"inline_keyboard": target_buttons}
+                
+                await edit_message_text(chat_id, message_id, text_msg, reply_markup)
             
+            # ============================================
+            # NEW: اکشن Ambassador - تعویض کارت
+            # ============================================
             elif data == "char_ambassador":
-                await answer_callback_query(cq_id, "🚧 Ambassador به زودی...", True)
+                game = get_game(chat_id)
+                if not game or game.state != "PLAYING":
+                    await answer_callback_query(cq_id, "❌ بازی در جریان نیست!", True)
+                    return {"status": "ok"}
+                
+                if not is_player_turn(game, user["id"]):
+                    await answer_callback_query(cq_id, "⚠️ نوبت شما نیست!", True)
+                    return {"status": "ok"}
+                
+                player = game.players[str(user["id"])]
+                
+                # NEW: تعویض کارت‌ها - برشتن کارت‌ها به دک، برداشتن ۲ کارت جدید
+                old_cards = player.cards.copy()
+                
+                # برگشت کارت‌های قدیمی به دک
+                for card in old_cards:
+                    game.deck.append(card)
+                
+                # برداشتن ۲ کارت جدید
+                random.shuffle(game.deck)
+                player.cards = [game.deck.pop(), game.deck.pop()]
+                
+                save_game(chat_id, game)
+                
+                # NEW: ارسال پیام خصوصی با کارت‌های جدید
+                cards_text = " | ".join(player.cards)
+                private_msg = f"🔄 کارت‌های جدید شما: {cards_text}\n💰 سکه‌ها: {player.coins}\n\nکارت‌های قبلی: {' | '.join(old_cards)}"
+                await send_message(int(user["id"]), private_msg)
+                
+                await answer_callback_query(cq_id, f"🔄 کارت‌های شما تعویض شد! کارت‌های جدید را در پیام خصوصی ببینید.")
+                
+                game.next_turn()
+                save_game(chat_id, game)
+                
+                text_msg = get_game_status_text(game)
+                await edit_message_text(chat_id, message_id, text_msg, get_main_menu_keyboard())
         
         return {"status": "ok"}
     
