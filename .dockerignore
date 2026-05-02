@@ -1,0 +1,10 @@
+__pycache__
+*.pyc
+.git
+.vscode
+.venv
+venv
+*.md
+.env.example
+supervisord.log
+supervisord.pid

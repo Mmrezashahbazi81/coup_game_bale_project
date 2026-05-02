@@ -1,0 +1,8 @@
+services:
+  bot_app:
+    build: .
+    container_name: coup_fat_container
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app  # این خط باعث می‌شود تغییرات کد شما فوراً اعمال شود
