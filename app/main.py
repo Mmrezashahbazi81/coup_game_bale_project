@@ -2,7 +2,7 @@
 from fastapi import FastAPI, Request
 import httpx
 from app.models import GameState, Player
-from app.database import get_game, save_game
+from app.database import get_game, save_game, delete_game
 from app.config import settings
 import logging
 
@@ -65,8 +65,13 @@ async def answer_callback_query(callback_query_id: str, text: str, show_alert: b
 async def root():
     return {"status": "Bot is running!"}
 
-# app/main.py
-# ... (بقیه کد از فاز ۱ بدون تغییر)
+#: تابع کمکی برای چک کردن نوبت (بیرون webhook تعریف میشه)
+def is_player_turn(game, user_id):
+    """چک میکنه آیا نوبت این بازیکنه یا نه"""
+    if not game or game.state != "PLAYING":
+        return False
+    current_player = game.get_current_player()
+    return current_player.user_id == user_id
 
 @app.post("/webhook")
 async def webhook(request: Request):
@@ -117,7 +122,7 @@ async def webhook(request: Request):
             data = cq["data"]
             cq_id = cq["id"]
             
-            # NEW: دکمه ورود به بازی
+            #: دکمه ورود به بازی
             if data == "join":
                 game = get_game(chat_id)
                 if not game or game.state != "LOBBY":
@@ -146,7 +151,7 @@ async def webhook(request: Request):
                     }
                     await edit_message_text(chat_id, message_id, text_msg, reply_markup)
             
-            # NEW: دکمه شروع بازی
+            #: دکمه شروع بازی
             elif data == "start":
                 game = get_game(chat_id)
                 if not game or game.state != "LOBBY":
@@ -162,32 +167,95 @@ async def webhook(request: Request):
                     )
                     return {"status": "ok"}
                 
-                # NEW: شروع بازی!
+                #: شروع بازی!
                 game.state = "PLAYING"
                 game.deal_cards()  # توزیع کارت‌ها
                 game.set_player_order()  # تنظیم نوبت
                 save_game(chat_id, game)
                 
-                # NEW: ارسال پیام شروع بازی
+                #: ارسال پیام شروع بازی
+                current = game.get_current_player()
                 players_list = "\n".join([f"{i+1}. {game.players[str(uid)].name}" for i, uid in enumerate(game.player_order)])
-                text_msg = f"🎮 بازی شروع شد!\n\n👥 ترتیب بازیکنان:\n{players_list}\n\n🃏 کارت‌ها توزیع شد!\n💰 هر بازیکن ۲ سکه دارد.\n\n🔹 نوبت: {game.players[str(game.player_order[0])].name}"
+                text_msg = f"🎮 بازی شروع شد!\n\n👥 ترتیب بازیکنان:\n{players_list}\n\n🃏 کارت‌ها توزیع شد!\n💰 هر بازیکن ۲ سکه دارد.\n\n🔹 نوبت: {current.name}"
                 
                 reply_markup = {
                     "inline_keyboard": [
-                        [{"text": "💰 درآمد", "callback_data": "action_income"}],
-                        [{"text": "🌐 کمک خارجی", "callback_data": "action_foreign_aid"}],
-                        [{"text": "💀 کودتا", "callback_data": "action_coup"}],
+                        [{"text": "💰 درآمد (+۱ سکه)", "callback_data": "action_income"}],  # CHANGED: متن واضح‌تر
+                        [{"text": "🌐 کمک خارجی (+۲ سکه)", "callback_data": "action_foreign_aid"}],  # CHANGED
+                        [{"text": "💀 کودتا (۷ سکه)", "callback_data": "action_coup"}],  # CHANGED
                         [{"text": "🎯 اقدامات شخصیت‌ها", "callback_data": "action_character"}]
                     ]
                 }
                 
                 await edit_message_text(chat_id, message_id, text_msg, reply_markup)
                 
-                # NEW: ارسال پیام خصوصی به هر بازیکن با کارت‌هاش
                 for uid, player in game.players.items():
                     cards_text = " | ".join(player.cards)
                     private_msg = f"🃏 کارت‌های شما: {cards_text}\n💰 سکه‌ها: {player.coins}"
                     await send_message(int(uid), private_msg)
+            
+            # ============================================
+            # NEW: اکشن درآمد
+            # ============================================
+            elif data == "action_income":
+                game = get_game(chat_id)
+                if not game or game.state != "PLAYING":
+                    await answer_callback_query(cq_id, "❌ بازی در جریان نیست!", True)
+                    return {"status": "ok"}
+                
+                # NEW: چک نوبت
+                if not is_player_turn(game, user["id"]):
+                    await answer_callback_query(cq_id, "⚠️ نوبت شما نیست!", True)
+                    return {"status": "ok"}
+                
+                # NEW: اضافه کردن ۱ سکه
+                game.add_coins(user["id"], 1)
+                current_player = game.players[str(user["id"])]
+                
+                await answer_callback_query(cq_id, f"✅ ۱ سکه دریافت کردید! (مجموع: {current_player.coins}💰)")
+                
+                # NEW: رفتن به نوبت بعدی
+                game.next_turn()
+                save_game(chat_id, game)
+                
+                # NEW: چک کردن برنده
+                winner = game.check_winner()
+                if winner:
+                    text_msg = f"🏆 {winner.name} برنده بازی شد! 🎉\n\n🎭 بازی به پایان رسید."
+                    await edit_message_text(chat_id, message_id, text_msg, None)
+                    delete_game(chat_id)
+                    return {"status": "ok"}
+                
+                # NEW: آپدیت پیام گروه با وضعیت جدید
+                next_player = game.get_current_player()
+                players_status = "\n".join([
+                    f"{'🟢' if game.players[str(uid)].is_alive else '💀'} {game.players[str(uid)].name}: {game.players[str(uid)].coins}💰"
+                    for uid in game.player_order
+                ])
+                text_msg = f"🎮 بازی در جریان است!\n\n👥 وضعیت:\n{players_status}\n\n🔹 نوبت: {next_player.name}"
+                
+                reply_markup = {
+                    "inline_keyboard": [
+                        [{"text": "💰 درآمد (+۱ سکه)", "callback_data": "action_income"}],
+                        [{"text": "🌐 کمک خارجی (+۲ سکه)", "callback_data": "action_foreign_aid"}],
+                        [{"text": "💀 کودتا (۷ سکه)", "callback_data": "action_coup"}],
+                        [{"text": "🎯 اقدامات شخصیت‌ها", "callback_data": "action_character"}]
+                    ]
+                }
+                
+                await edit_message_text(chat_id, message_id, text_msg, reply_markup)
+            
+            # ============================================
+            # NEW: اکشن‌های بعدی (placeholder)
+            # ============================================
+            elif data == "action_foreign_aid":
+                await answer_callback_query(cq_id, "🚧 به زودی پیاده‌سازی می‌شود!", True)
+            
+            elif data == "action_coup":
+                await answer_callback_query(cq_id, "🚧 به زودی پیاده‌سازی می‌شود!", True)
+            
+            elif data == "action_character":
+                await answer_callback_query(cq_id, "🚧 به زودی پیاده‌سازی می‌شود!", True)
         
         return {"status": "ok"}
     

@@ -32,7 +32,7 @@ class GameState(BaseModel):
     # NEW: متد ساخت دک اولیه
     def create_deck(self) -> List[str]:
         # در حالت کلاسیک: 3 تا از هر کارت (5 نوع کارت = 15 کارت)
-        cards = ["Duke"] * 3 + ["Assassin"] * 3 + ["Contessa"] * 3 + ["Captain"] * 3 + ["Ambassador"] * 3
+        cards = ["Duke"] * 5 + ["Assassin"] * 5 + ["Contessa"] * 5 + ["Captain"] * 5 + ["Ambassador"] * 5
         random.shuffle(cards)
         return cards
     
@@ -48,3 +48,40 @@ class GameState(BaseModel):
         self.player_order = [int(uid) for uid in self.players.keys()]
         random.shuffle(self.player_order)
         self.current_turn_index = 0
+        
+    # NEW: گرفتن بازیکن فعلی
+    def get_current_player(self) -> Player:
+        uid = str(self.player_order[self.current_turn_index])
+        return self.players[uid]
+    
+    # NEW: رفتن به نوبت بعدی
+    def next_turn(self):
+        self.current_turn_index = (self.current_turn_index + 1) % len(self.player_order)
+        # اگه بازیکن بعدی مرده بود، برو بعدی
+        attempts = 0
+        while not self.get_current_player().is_alive and attempts < len(self.player_order):
+            self.current_turn_index = (self.current_turn_index + 1) % len(self.player_order)
+            attempts += 1
+    
+    # NEW: چک کردن تعداد بازیکنان زنده
+    def alive_count(self) -> int:
+        return sum(1 for p in self.players.values() if p.is_alive)
+    
+    # NEW: چک کردن برنده
+    def check_winner(self) -> Optional[Player]:
+        alive_players = [p for p in self.players.values() if p.is_alive]
+        if len(alive_players) == 1:
+            return alive_players[0]
+        return None
+    
+    # NEW: اضافه کردن سکه به بازیکن
+    def add_coins(self, user_id: int, amount: int):
+        self.players[str(user_id)].coins += amount
+    
+    # NEW: کم کردن سکه از بازیکن
+    def remove_coins(self, user_id: int, amount: int) -> bool:
+        player = self.players[str(user_id)]
+        if player.coins >= amount:
+            player.coins -= amount
+            return True
+        return False        
