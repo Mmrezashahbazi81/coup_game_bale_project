@@ -1,3 +1,4 @@
+#game_engine.py
 import random
 import time
 from typing import List, Dict, Optional, Tuple, Any
@@ -118,8 +119,9 @@ class GameEngine:
         self.creator_id = creator_id
         self.state = GameState.SET_MODE
         self.mode: Optional[GameMode] = None
-        self.timeout_sec: int = 0
+        self.timeout_sec: int = 30
         self.last_active: float = time.time()
+        self.timer_task_id: Optional[str] = None
         
         # Players
         self.players: Dict[int, Player] = {}  # user_id -> Player
@@ -536,7 +538,7 @@ class GameEngine:
         result = ChallengeResult(
             success=False,
             challenger_id=user_id,
-            target_id=self.actor_id if self.state in [GameState.CHALLENGE_ACT, GameState.BLOCK_FOREIGN] else self.blocker_id,
+            target_id=(self.actor_id if self.state in [GameState.CHALLENGE_ACT, GameState.BLOCK_FOREIGN] else self.blocker_id) or 0,
             message=""
         )
         
@@ -562,6 +564,7 @@ class GameEngine:
             result.message = "در حال حاضر چالش ممکن نیست!"
             return result
         
+        assert target_id is not None
         target = self.players[target_id]
         challenger = self.players[user_id]
         
@@ -605,16 +608,19 @@ class GameEngine:
     def execute_action_after_challenge(self) -> Tuple[bool, str]:
         """Execute the pending action after all challenges are resolved."""
         if self.action == 'برداشت 3 سکه':
-            self.players[self.actor_id].coins += 3
+            if self.actor_id is not None:
+                self.players[self.actor_id].coins += 3
             self.next_turn()
             return True, "۳ سکه برداشت شد"
         
         elif self.action == 'تبادل':
-            self._start_exchange(self.actor_id, EXCHANGE_DRAW_COUNT_AMBASSADOR, GameState.WAITING_EXCHANGE)
+            if self.actor_id is not None:
+                self._start_exchange(self.actor_id, EXCHANGE_DRAW_COUNT_AMBASSADOR, GameState.WAITING_EXCHANGE)
             return True, "exchange_started"
         
         elif self.action == 'تبادل بازرس':
-            self._start_exchange(self.actor_id, EXCHANGE_DRAW_COUNT_INQUISITOR, GameState.WAITING_INQ_EXCHANGE)
+            if self.actor_id is not None:
+                self._start_exchange(self.actor_id, EXCHANGE_DRAW_COUNT_INQUISITOR, GameState.WAITING_INQ_EXCHANGE)
             return True, "inq_exchange_started"
         
         elif self.action == 'بازرسی':
@@ -697,17 +703,21 @@ class GameEngine:
     def _apply_attack(self) -> Tuple[bool, str]:
         """Apply the attack effect."""
         if self.action == 'سوقصد':
-            self.players[self.actor_id].coins -= ASSASSIN_COST
+            if self.actor_id is not None:
+                self.players[self.actor_id].coins -= ASSASSIN_COST
             self.next_step = 'next_turn'
             self.dropping_uid = self.target_id
             self.state = GameState.WAITING_DROP
             return True, "drop_required"
         
         elif self.action == 'باج‌گیری':
-            target = self.players[self.target_id]
+            target = self.players[self.target_id] if self.target_id is not None else None
+            if target is None:
+                return False, "هدف نامعتبر!"
             steal_amount = min(2, target.coins)
             target.coins -= steal_amount
-            self.players[self.actor_id].coins += steal_amount
+            if self.actor_id is not None:
+                self.players[self.actor_id].coins += steal_amount
             self.game_log.append(f"🏴‍☠️ {steal_amount} سکه دزدیده شد")
             self._trim_log()
             self.next_turn()
@@ -771,7 +781,7 @@ class GameEngine:
     def _resolve_after_drop(self) -> Tuple[bool, str]:
         """Resolve the game state after a card is dropped."""
         # Check if dropped player is now dead
-        dropper = self.players[self.dropping_uid]
+        dropper = self.players[self.dropping_uid] if self.dropping_uid is not None else None
         
         winner = self._check_winner()
         if winner:
@@ -929,7 +939,9 @@ class GameEngine:
             return False, "شما بازرس نیستید!"
         
         if force_exchange and self.inq_shown_card:
-            target = self.players[self.target_id]
+            target = self.players[self.target_id] if self.target_id is not None else None
+            if target is None:
+                return False, "هدف نامعتبر!"
             if self.inq_shown_card in target.cards:
                 target.cards.remove(self.inq_shown_card)
                 self.deck.append(self.inq_shown_card)
@@ -940,7 +952,8 @@ class GameEngine:
             
             self.game_log.append(f"👁 بازرس {target.name} را مجبور به تعویض کارت کرد")
         else:
-            self.game_log.append(f"👁 بازرس اجازه داد {self.players[self.target_id].name} کارتش را نگه دارد")
+            if self.target_id is not None:
+                self.game_log.append(f"👁 بازرس اجازه داد {self.players[self.target_id].name} کارتش را نگه دارد")
         
         self._trim_log()
         self.inq_shown_card = None
@@ -1005,7 +1018,8 @@ class GameEngine:
         if self.state == GameState.CHALLENGE_ACT:
             return self.execute_action_after_challenge()
         elif self.state == GameState.BLOCK_FOREIGN:
-            self.players[self.actor_id].coins += 2
+            if self.actor_id is not None:
+                self.players[self.actor_id].coins += 2
             self.next_turn()
             return True, "کمک خارجی پذیرفته شد"
         elif self.state == GameState.CHALLENGE_BLK:
@@ -1020,6 +1034,8 @@ class GameEngine:
     def _generate_deck(self) -> List[str]:
         """Generate deck based on game mode."""
         deck = []
+        if self.mode is None:
+            return []
         for role, count in ROLE_COUNTS[self.mode].items():
             deck.extend([role] * count)
         return deck
@@ -1063,6 +1079,26 @@ class GameEngine:
         if not player:
             return None
         return player.to_dict()
+    
+    def _get_actor(self) -> Player:
+        """Get actor player. Raises if None."""
+        assert self.actor_id is not None, "actor_id is None!"
+        return self.players[self.actor_id]
+
+    def _get_target(self) -> Player:
+        """Get target player. Raises if None."""
+        assert self.target_id is not None, "target_id is None!"
+        return self.players[self.target_id]
+
+    def _get_dropper(self) -> Player:
+        """Get dropping player. Raises if None."""
+        assert self.dropping_uid is not None, "dropping_uid is None!"
+        return self.players[self.dropping_uid]
+
+    def _get_blocker(self) -> Player:
+        """Get blocker player. Raises if None."""
+        assert self.blocker_id is not None, "blocker_id is None!"
+        return self.players[self.blocker_id]
     
     def _to_model(self):
         """Convert engine to GameStateModel (for saving to Redis)"""

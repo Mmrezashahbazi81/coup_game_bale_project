@@ -1,4 +1,5 @@
 """
+main.py
 FastAPI Webhook Handler for Coup Bot
 این فایل فقط مسئول:
 ۱. دریافت Webhook از بله
@@ -14,6 +15,8 @@ import httpx
 import logging
 import random
 from typing import Optional, Dict, List, Tuple
+from app.worker import turn_timer, challenge_timer, cancel_timer
+
 
 from app.database import get_game, save_game, delete_game
 from app.config import settings
@@ -48,7 +51,7 @@ async def call_bot_api(method: str, payload: dict) -> Optional[httpx.Response]:
         return None
 
 
-async def send_message(chat_id: int, text: str, reply_markup: dict = None):
+async def send_message(chat_id: int, text: str, reply_markup: Optional[dict] = None):
     """ارسال پیام به گروه یا PV"""
     payload = {"chat_id": chat_id, "text": text}
     if reply_markup:
@@ -56,7 +59,7 @@ async def send_message(chat_id: int, text: str, reply_markup: dict = None):
     return await call_bot_api("sendMessage", payload)
 
 
-async def edit_message_text(chat_id: int, message_id: int, text: str, reply_markup: dict = None):
+async def edit_message_text(chat_id: int, message_id: int, text: str, reply_markup: Optional[dict] = None):
     """ویرایش پیام موجود"""
     payload = {"chat_id": chat_id, "message_id": message_id, "text": text}
     if reply_markup:
@@ -86,8 +89,7 @@ async def start_turn_timer(chat_id: int, user_id: int, duration: int) -> Optiona
     if duration <= 0:
         return None
     try:
-        from app.worker import turn_timer
-        task = turn_timer.apply_async(args=[chat_id, user_id], countdown=duration)
+        task = turn_timer.apply_async(args=[chat_id, user_id], countdown=duration)  # type: ignore
         logger.info(f"Turn timer started: task_id={task.id}, chat={chat_id}, user={user_id}, duration={duration}s")
         return task.id
     except Exception as e:
@@ -100,8 +102,7 @@ async def start_challenge_timer(chat_id: int, action: str, actor_id: int, target
     if duration <= 0:
         return None
     try:
-        from app.worker import challenge_timer
-        task = challenge_timer.apply_async(
+        task = challenge_timer.apply_async( # type: ignore
             args=[chat_id, action, actor_id, target_id],
             countdown=duration
         )
@@ -117,8 +118,7 @@ async def cancel_timer_task(task_id: str):
     if not task_id:
         return
     try:
-        from app.worker import cancel_timer
-        cancel_timer.delay(task_id)
+        cancel_timer.delay(task_id) # type: ignore
         logger.info(f"Timer cancelled: {task_id}")
     except Exception as e:
         logger.error(f"Failed to cancel timer: {e}")
@@ -305,12 +305,12 @@ def build_dashboard_text(engine: GameEngine) -> str:
                 text += "\n⚠️ **۱۰+ سکه! مجبور به کودتا هستید!**"
     
     elif engine.state == GameState.WAITING_TARGET:
-        actor = engine.players.get(engine.actor_id)
+        actor = engine.players.get(engine.actor_id) if engine.actor_id else None
         if actor:
             text += f"\n🎯 **{actor.name}** در حال انتخاب هدف..."
     
     elif engine.state == GameState.CHALLENGE_ACT:
-        actor = engine.players.get(engine.actor_id)
+        actor = engine.players.get(engine.actor_id) if engine.actor_id else None
         if actor:
             target_text = ""
             if engine.target_id and engine.target_id in engine.players:
@@ -319,25 +319,25 @@ def build_dashboard_text(engine: GameEngine) -> str:
             text += "\n⚠️ چالش می‌کنید؟"
     
     elif engine.state == GameState.BLOCK_FOREIGN:
-        actor = engine.players.get(engine.actor_id)
+        actor = engine.players.get(engine.actor_id) if engine.actor_id else None
         if actor:
             text += f"\n🌐 **{actor.name}** درخواست کمک خارجی دارد."
             text += "\n🛡️ کسی با دوک بلاک می‌کند؟"
     
     elif engine.state == GameState.BLOCK_PHASE:
-        target = engine.players.get(engine.target_id)
+        target = engine.players.get(engine.target_id) if engine.target_id else None
         if target:
             text += f"\n🛡️ **{target.name}** مورد حمله ({engine.action}) قرار گرفته!"
             text += "\nدفاع می‌کنی یا تسلیم می‌شوی؟"
     
     elif engine.state == GameState.CHALLENGE_BLK:
-        blocker = engine.players.get(engine.blocker_id)
+        blocker = engine.players.get(engine.blocker_id) if engine.blocker_id else None
         if blocker:
             text += f"\n🛡️ **{blocker.name}** با **{engine.block_card}** دفاع کرد!"
             text += "\n⚠️ چالش می‌کنید؟"
     
     elif engine.state == GameState.WAITING_DROP:
-        dropper = engine.players.get(engine.dropping_uid)
+        dropper = engine.players.get(engine.dropping_uid) if engine.dropping_uid else None
         if dropper:
             text += f"\n⏳ **{dropper.name}** در حال سوزاندن کارت در PV..."
     
@@ -367,7 +367,7 @@ def build_dashboard_keyboard(engine: GameEngine) -> dict:
     return {"inline_keyboard": []}
 
 
-async def handle_player_action(chat_id: int, engine: GameEngine, user_id: int, action: str, target_id: int = None):
+async def handle_player_action(chat_id: int, engine: GameEngine, user_id: int, action: str, target_id: Optional[int] = None):
     """مدیریت اکشن‌های بازیکن و آپدیت بازی"""
     
     # === درآمد ===
@@ -450,11 +450,15 @@ async def handle_player_action(chat_id: int, engine: GameEngine, user_id: int, a
         buttons = [[{"text": f"🎯 {p.name}", "callback_data": f"assassinate_target_{p.user_id}"}] for p in alive_others]
         buttons.append([{"text": "🔙 انصراف", "callback_data": "action_cancel"}])
         
+        if engine.msg_id is None:
+            return
+
         await edit_message_text(
             chat_id, engine.msg_id,
             f"🗡️ انتخاب هدف ترور:",
             {"inline_keyboard": buttons}
         )
+
     
     # === فرمانده (باج‌گیری) ===
     elif action == "captain":
@@ -466,11 +470,15 @@ async def handle_player_action(chat_id: int, engine: GameEngine, user_id: int, a
         buttons = [[{"text": f"🎯 {p.name} ({p.coins}💰)", "callback_data": f"steal_target_{p.user_id}"}] for p in alive_others]
         buttons.append([{"text": "🔙 انصراف", "callback_data": "action_cancel"}])
         
+        if engine.msg_id is None:
+            return
+
         await edit_message_text(
             chat_id, engine.msg_id,
-            f"🏴‍☠️ انتخاب هدف باج‌گیری:",
+            f"🗡️ انتخاب هدف ترور:",
             {"inline_keyboard": buttons}
         )
+
     
     # === کودتا ===
     elif action == "coup":
@@ -482,11 +490,15 @@ async def handle_player_action(chat_id: int, engine: GameEngine, user_id: int, a
         buttons = [[{"text": f"💀 {p.name}", "callback_data": f"coup_target_{p.user_id}"}] for p in alive_others]
         buttons.append([{"text": "🔙 انصراف", "callback_data": "action_cancel"}])
         
+        if engine.msg_id is None:
+            return
+
         await edit_message_text(
             chat_id, engine.msg_id,
-            f"💀 انتخاب هدف کودتا (۷ سکه):",
+            f"🗡️ انتخاب هدف ترور:",
             {"inline_keyboard": buttons}
         )
+
 
 
 async def handle_timeout_result(chat_id: int, engine: GameEngine, result: str):
@@ -591,6 +603,10 @@ async def webhook(request: Request):
                     return {"status": "ok"}
                 
                 engine = GameEngine(chat_id=chat_id, creator_id=user["id"])
+                
+                engine.set_mode("classic")           # SET_MODE → SET_TIMER
+                engine.set_timer(engine.timeout_sec) # SET_TIMER → LOBBY
+                
                 engine.join(user["id"], user.get("first_name", "ناشناس"))
                 
                 save_game(chat_id, GameStateModel.from_engine(engine))
@@ -796,6 +812,9 @@ async def webhook(request: Request):
                 
                 if not engine.mode:
                     engine.set_mode("classic")
+    
+                if engine.state == GameState.SET_TIMER:      # ← این خط رو اضافه کن
+                    engine.set_timer(engine.timeout_sec)      # ← این خط رو اضافه کن                    
                 
                 success, msg = engine.start_game()
                 if not success:

@@ -28,7 +28,7 @@ class GameStateModel(BaseModel):
     creator_id: int
     state: str = "SET_MODE"  # تمام state های بازی
     mode: Optional[str] = None  # classic / expansion
-    timeout_sec: int = 0
+    timeout_sec: int = 30
     
     # Players & Order
     players: Dict[str, PlayerModel] = {}  # user_id (str) -> PlayerModel
@@ -107,8 +107,11 @@ class GameStateModel(BaseModel):
 
         if self.mode and isinstance(self.mode, str):
             engine.mode = GameMode(self.mode)
-        else:
+        elif self.mode and isinstance(self.mode, GameMode):
             engine.mode = self.mode
+        else:
+            engine.mode = None
+        
         engine.timeout_sec = self.timeout_sec
         engine.last_active = self.last_active
         
