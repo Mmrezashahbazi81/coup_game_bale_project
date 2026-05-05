@@ -212,16 +212,21 @@ def build_block_phase_keyboard(engine: GameEngine) -> dict:
     return {"inline_keyboard": keyboard}
 
 
-def build_drop_keyboard(engine: GameEngine, user_id: int) -> dict:
-    """ساخت کیبورد سوزاندن کارت"""
+def build_drop_keyboard(engine: GameEngine, user_id: int, chat_id: Optional[int] = None) -> dict:
     cards = engine.get_drop_cards(user_id)
     if not cards:
         return {"inline_keyboard": []}
     
-    buttons = [
-        [{"text": f"🔥 سوزاندن {c}", "callback_data": f"drop_{i}"}]
-        for i, c in enumerate(cards)
-    ]
+    # اگه chat_id داده نشده، از engine بردار
+    if chat_id is None:
+        chat_id = engine.chat_id
+    
+    buttons = []
+    for i, c in enumerate(cards):
+        # شماره بذار که مشخص باشه کدوم کارته
+        label = f"🔥 سوزاندن {c} (#{i+1})"
+        buttons.append([{"text": label, "callback_data": f"drop_{chat_id}_{i}"}])
+    
     return {"inline_keyboard": buttons}
 
 
@@ -357,15 +362,55 @@ def build_dashboard_text(engine: GameEngine) -> str:
     return text
 
 
+def build_waiting_target_keyboard(engine: GameEngine) -> dict:
+    """ساخت کیبورد انتخاب هدف"""
+    alive_others = [
+        p for uid, p in engine.players.items()
+        if p.is_alive and uid != engine.actor_id
+    ]
+    
+    buttons = [
+        [{"text": f"🎯 {p.name}", "callback_data": f"target_{p.user_id}"}]
+        for p in alive_others
+    ]
+    buttons.append([{"text": "🔙 انصراف", "callback_data": "action_cancel"}])
+    return {"inline_keyboard": buttons}
+
+
 def build_dashboard_keyboard(engine: GameEngine) -> dict:
     """ساخت کیبورد داشبورد بر اساس state"""
+    
     if engine.state == GameState.PLAYING:
         current = engine.get_current_player()
         if current:
             return build_main_menu_keyboard(engine, current.user_id)
     
+    elif engine.state in [GameState.CHALLENGE_ACT, GameState.CHALLENGE_BLK]:
+        return build_challenge_keyboard(engine)
+    
+    elif engine.state == GameState.BLOCK_FOREIGN:
+        return build_block_foreign_keyboard(engine)
+    
+    elif engine.state == GameState.BLOCK_PHASE:
+        return build_block_phase_keyboard(engine)
+    
+    elif engine.state == GameState.WAITING_TARGET:
+        # دکمه‌های انتخاب هدف برای همه نشون داده میشه
+        alive_others = [
+            p for uid, p in engine.players.items()
+            if p.is_alive and uid != engine.actor_id
+        ]
+        if not alive_others:
+            return {"inline_keyboard": []}
+        
+        buttons = [
+            [{"text": f"🎯 {p.name}", "callback_data": f"target_{p.user_id}"}]
+            for p in alive_others
+        ]
+        buttons.append([{"text": "🔙 انصراف", "callback_data": "action_cancel"}])
+        return {"inline_keyboard": buttons}
+    
     return {"inline_keyboard": []}
-
 
 async def handle_player_action(chat_id: int, engine: GameEngine, user_id: int, action: str, target_id: Optional[int] = None):
     """مدیریت اکشن‌های بازیکن و آپدیت بازی"""
@@ -863,6 +908,11 @@ async def webhook(request: Request):
             
             # COUP TARGET
             elif data.startswith("coup_target_"):
+            # فقط actor می‌تونه هدف انتخاب کنه
+                if user["id"] != engine.actor_id:
+                    await answer_callback(cq_id, "⏳ صبر کنید! الان نوبت شما نیست!", True)
+                    return {"status": "ok"}
+    
                 target_id = int(data.replace("coup_target_", ""))
                 success, msg = engine.coup(user["id"], target_id)
                 if not success:
@@ -875,7 +925,7 @@ async def webhook(request: Request):
                     await send_message(
                         target_id,
                         "💀 **کودتا شدید!** یک کارت باید بسوزانید:",
-                        build_drop_keyboard(engine, target_id)
+                        build_drop_keyboard(engine, target_id, engine.chat_id)
                     )
                     await answer_callback(cq_id, "💀 کودتا انجام شد")
                 return {"status": "ok"}
@@ -890,6 +940,11 @@ async def webhook(request: Request):
             
             # ASSASSIN TARGET
             elif data.startswith("assassinate_target_"):
+            # فقط actor می‌تونه هدف انتخاب کنه
+                if user["id"] != engine.actor_id:
+                    await answer_callback(cq_id, "⏳ صبر کنید! الان نوبت شما نیست!", True)
+                    return {"status": "ok"}
+    
                 target_id = int(data.replace("assassinate_target_", ""))
                 success, msg = engine.assassinate(user["id"], target_id)
                 if not success:
@@ -914,6 +969,11 @@ async def webhook(request: Request):
             
             # STEAL TARGET
             elif data.startswith("steal_target_"):
+            # فقط actor می‌تونه هدف انتخاب کنه
+                if user["id"] != engine.actor_id:
+                    await answer_callback(cq_id, "⏳ صبر کنید! الان نوبت شما نیست!", True)
+                    return {"status": "ok"}
+    
                 target_id = int(data.replace("steal_target_", ""))
                 success, msg = engine.steal(user["id"], target_id)
                 if not success:
@@ -1032,7 +1092,7 @@ async def webhook(request: Request):
                         await send_message(
                             result.challenger_id,
                             "❌ چالش ناموفق! یک کارت را برای سوزاندن انتخاب کنید:",
-                            build_drop_keyboard(engine, result.challenger_id)
+                            build_drop_keyboard(engine, result.challenger_id, engine.chat_id)
                         )
                     else:
                         engine.drop_card(result.challenger_id, 0)
@@ -1047,7 +1107,7 @@ async def webhook(request: Request):
                         await send_message(
                             result.target_id,
                             "❌ مچ‌گیری شدید! یک کارت را برای سوزاندن انتخاب کنید:",
-                            build_drop_keyboard(engine, result.target_id)
+                            build_drop_keyboard(engine, result.target_id, engine.chat_id)
                         )
                     else:
                         engine.drop_card(result.target_id, 0)
@@ -1121,7 +1181,7 @@ async def webhook(request: Request):
                     await send_message(
                         engine.target_id,
                         "⚠️ حمله موفق بود! یک کارت را برای سوزاندن انتخاب کنید:",
-                        build_drop_keyboard(engine, engine.target_id)
+                        build_drop_keyboard(engine, engine.target_id, engine.chat_id)
                     )
                     await answer_callback(cq_id, "😔 تسلیم")
                 else:
@@ -1133,7 +1193,25 @@ async def webhook(request: Request):
             # ==================== DROP ====================
             
             elif data.startswith("drop_"):
-                card_index = int(data.replace("drop_", ""))
+                parts = data.split("_")
+                if len(parts) == 3:
+                # فرمت جدید: drop_{chat_id}_{index}
+                    drop_chat_id = int(parts[1])
+                    card_index = int(parts[2])
+                else:
+                # فرمت قدیمی: drop_{index}
+                    drop_chat_id = chat_id
+                    card_index = int(parts[1])
+    
+                # بازی رو با chat_id اصلی پیدا کن
+                game_model = get_game(drop_chat_id)
+                if not game_model:
+                    await answer_callback(cq_id, "❌ بازی وجود ندارد!", True)
+                    return {"status": "ok"}
+    
+                engine = game_model.to_engine()
+                engine.msg_id = message_id
+    
                 success, msg = engine.drop_card(user["id"], card_index)
                 
                 if not success:
@@ -1146,28 +1224,28 @@ async def webhook(request: Request):
                 else:
                     await send_message(user["id"], "💀 آخرین کارت شما سوخت! حذف شدید.")
                 
-                save_game(chat_id, GameStateModel.from_engine(engine))
+                save_game(drop_chat_id, GameStateModel.from_engine(engine))
                 
                 winner = engine._check_winner()
                 if winner:
-                    await update_dashboard(chat_id, engine)
-                    await send_message(chat_id, f"🏆 {winner.name} برنده شد!")
-                    delete_game(chat_id)
+                    await update_dashboard(drop_chat_id, engine)
+                    await send_message(drop_chat_id, f"🏆 {winner.name} برنده شد!")
+                    delete_game(drop_chat_id)
                     return {"status": "ok"}
                 
                 if msg == "next_turn":
                     current = engine.get_current_player()
                     if current and engine.timeout_sec > 0:
-                        task_id = await start_turn_timer(chat_id, current.user_id, engine.timeout_sec)
+                        task_id = await start_turn_timer(drop_chat_id, current.user_id, engine.timeout_sec)
                         engine.timer_task_id = task_id
-                    save_game(chat_id, GameStateModel.from_engine(engine))
-                    await update_dashboard(chat_id, engine)
+                    save_game(drop_chat_id, GameStateModel.from_engine(engine))
+                    await update_dashboard(drop_chat_id, engine)
                 elif msg == "block_phase":
-                    save_game(chat_id, GameStateModel.from_engine(engine))
-                    await update_dashboard(chat_id, engine)
+                    save_game(drop_chat_id, GameStateModel.from_engine(engine))
+                    await update_dashboard(drop_chat_id, engine)
                 elif msg.startswith("exchange") or msg.startswith("inq"):
-                    save_game(chat_id, GameStateModel.from_engine(engine))
-                    await update_dashboard(chat_id, engine)
+                    save_game(drop_chat_id, GameStateModel.from_engine(engine))
+                    await update_dashboard(drop_chat_id, engine)
                 
                 await answer_callback(cq_id, "🔥")
                 return {"status": "ok"}
